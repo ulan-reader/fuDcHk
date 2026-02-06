@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Mediasoup Mic Test</title>
+</head>
+<body>
+<button id="start">Start mic → produce audio</button>
+
+
+<script type="module">
+  import * as mediasoupClient from 'mediasoup-client';
+  import { io } from 'socket.io-client';
+
+  const socket = io('http://localhost:3000');
+
+  let device;
+  let transport;
+  let producer;
+
+  document.getElementById('start').onclick = async () => {
+    console.log('▶️ start clicked');
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('🎙 got stream');
+    } catch (e) {
+      console.error('❌ mic error', e);
+      return;
+    }
+
+    const track = stream.getAudioTracks()[0];
+    if (!track) {
+      console.error('❌ no audio track');
+      return;
+    }
+    console.log('🎧 track ready');
+
+    // 1. Получить rtpCapabilities с сервера
+    const rtpCapabilities = await new Promise(resolve => {
+      socket.emit('getRtpCapabilities', null, resolve);
+    });
+    console.log('📦 rtpCapabilities received');
+
+    // 2. Загрузить device
+    device = new mediasoupClient.Device();
+    await device.load({ routerRtpCapabilities: rtpCapabilities });
+    console.log('📡 device loaded, canProduce audio →', device.canProduce('audio'));
+
+    if (!device.canProduce('audio')) {
+      console.error('❌ cannot produce audio');
+      return;
+    }
+
+    // 3. Создать send transport на сервере
+    const transportParams = await new Promise(resolve => {
+      socket.emit('createTransport', null, resolve);
+    });
+    console.log('🚚 transport params received', transportParams);
+
+    transport = device.createSendTransport(transportParams);
+
+    // Обработчик события "connect" (DTLS handshake)
+    transport.on('connect', ({ dtlsParameters }, callback, errback) => {
+      console.log('🔐 transport connect event');
+      socket.emit('connectTransport', { dtlsParameters }, response => {
+        if (response?.error) {
+          errback(response.error);
+          return;
+        }
+        callback();
+      });
+    });
+
+    // Обработчик события "produce" (когда клиент хочет создать producer)
+    transport.on('produce', ({ kind, rtpParameters }, callback, errback) => {
+      console.log('📤 produce event triggered', kind);
+      socket.emit('produce', { kind, rtpParameters }, response => {
+        if (response?.error) {
+          errback(response.error);
+          return;
+        }
+        callback({ id: response.id });
+      });
+    });
+
+    transport.on('connectionstatechange', state => {
+      console.log('transport connectionstatechange →', state);
+    });
+
+    // 4. Создать producer (отправить трек в SFU)
+    try {
+      producer = await transport.produce({
+        track,
+        // encodings: [{ maxBitrate: 64000 }], // опционально для opus
+        codecOptions: {
+          opusStereo: 1,
+          opusDtx: 1
+        }
+      });
+      console.log('✅ producer created → ID:', producer.id);
+    } catch (err) {
+      console.error('❌ produce failed', err);
+    }
+  };
+</script>
+
+
+</body>
+</html>

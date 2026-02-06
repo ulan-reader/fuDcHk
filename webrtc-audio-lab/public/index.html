@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="UTF-8">
+	<title>Mediasoup Mic Test</title>
+	<!-- socket.io (уже работает) -->
+	<script src="/socket.io/socket.io.js"></script>
+
+	<!-- mediasoup-client с CDN (рекомендую jsDelivr, стабильнее) -->
+	<script src="https://cdn.jsdelivr.net/npm/mediasoup-client@3/lib/index.min.js"></script>
+	<!-- или свежайшая версия на момент 2026 -->
+	<!-- <script src="https://cdn.jsdelivr.net/npm/mediasoup-client@3.18.6/lib/index.min.js"></script> -->
+</head>
+<body>
+<button id="start">Start mic → produce audio</button>
+
+<script>
+    const { Device } = mediasoupClient;   // ← вот так
+
+    let device;
+    let transport;
+    let producer;
+
+    // socket.io клиент — берём из стандартного пути
+    const socket = io();   // ← это работает, если сервер на том же origin
+
+    document.getElementById("start").onclick = async () => {
+        console.log("▶️ start clicked");
+
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            console.log("🎙 got stream");
+        } catch (e) {
+            console.error("❌ mic error", e);
+            return;
+        }
+
+        const track = stream.getAudioTracks()[0];
+        if (!track) {
+            console.error("❌ no audio track");
+            return;
+        }
+        console.log("🎧 track ready", track);
+
+        // 1. Получаем rtpCapabilities
+        const rtpCapabilities = await new Promise(resolve => {
+            socket.emit("getRtpCapabilities", null, resolve);
+        });
+        console.log("📦 rtpCapabilities received");
+
+        // 2. Загружаем device
+
+        // дальше как было:
+        device = new Device();
+        await device.load({ routerRtpCapabilities: rtpCapabilities });
+        // Глобальные переменные (для простоты отладки)
+        console.log("📡 device loaded, canProduce audio →", device.canProduce("audio"));
+
+        // 3. Создаём send-транспорт
+        const params = await new Promise(resolve => {
+            socket.emit("createTransport", null, resolve);
+        });
+        console.log("🚚 transport params", params);
+
+        transport = device.createSendTransport(params);
+
+        transport.on("connect", ({ dtlsParameters }, callback, errback) => {
+            console.log("🔐 transport connect event");
+            socket.emit("connectTransport", { dtlsParameters }, response => {
+                if (response?.error) {
+                    errback(response.error);
+                    return;
+                }
+                callback();
+            });
+        });
+
+        transport.on("produce", ({ kind, rtpParameters }, callback, errback) => {
+            console.log("📤 produce event", kind);
+            socket.emit("produce", { kind, rtpParameters }, response => {
+                if (response?.error) {
+                    errback(response.error);
+                    return;
+                }
+                callback({ id: response.id });
+            });
+        });
+
+        transport.on("connectionstatechange", state => {
+            console.log("transport connectionstatechange →", state);
+        });
+
+        // 4. Производим аудио
+        try {
+            producer = await transport.produce({ track });
+            console.log("✅ producer created →", producer.id);
+        } catch (err) {
+            console.error("❌ produce failed", err);
+        }
+    };
+</script>
+</body>
+</html>

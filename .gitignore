@@ -1,0 +1,11 @@
+./whisper.cpp
+
+./whisper-example/target
+
+./webrtc-audio-lab/node_modules
+./webrtc-audio-lab/client/dist
+./webrtc-audio-lab/client/node_modules
+./webrtc-audio-lab/client/.parcel-cache
+
+
+./rtp_listener/target
